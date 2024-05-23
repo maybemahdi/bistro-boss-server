@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const app = express();
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const port = process.env.PORT || 5000;
 require("dotenv").config();
 
@@ -13,7 +15,7 @@ const corsOptions = {
 //middlewares
 app.use(cors(corsOptions));
 app.use(express.json());
-//   app.use(cookieParser());
+app.use(cookieParser());
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.nrdgddr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -34,6 +36,61 @@ async function run() {
     const menuCollection = client.db("bistroDB").collection("menu");
     const reviewCollection = client.db("bistroDB").collection("reviews");
     const cartCollection = client.db("bistroDB").collection("carts");
+    const userCollection = client.db("bistroDB").collection("users");
+
+    //my middlewares
+    const verifyToken = (req, res, next) => {
+      const token = req.cookies?.token;
+      if (!token) {
+        return res.status(401).send({ message: "Unauthorized Access" });
+      }
+      jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
+        if (err) {
+          return res.status(401).send({ message: "Unauthorized Access" });
+        }
+        req.user = decoded;
+        next();
+      });
+    };
+
+    // use verify admin after verifyToken
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.user.email;
+      const query = { userEmail: email };
+      const user = await userCollection.findOne(query);
+      const isAdmin = user?.role === "Admin";
+      if (!isAdmin) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
+    // auth related api
+    app.post("/jwt", async (req, res) => {
+      const user = req.body;
+      const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
+        expiresIn: "1d",
+      });
+      res
+        .cookie("token", token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+        })
+        .send({ success: true });
+    });
+
+    app.post("/logout", async (req, res) => {
+      const user = req.body;
+      console.log("logging out", user.email);
+      res
+        .clearCookie("token", {
+          maxAge: 0,
+          sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
+          secure: true,
+        })
+        .send({ success: true });
+    });
 
     app.get("/menu", async (req, res) => {
       const result = await menuCollection.find().toArray();
@@ -43,8 +100,11 @@ async function run() {
       const result = await reviewCollection.find().toArray();
       res.send(result);
     });
-    app.get("/carts", async (req, res) => {
+    app.get("/carts", verifyToken, async (req, res) => {
       const queryEmail = req.query.email;
+      if (req.user.email !== queryEmail) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
       const query = { userEmail: queryEmail };
       const result = await cartCollection.find(query).toArray();
       res.send(result);
@@ -58,6 +118,63 @@ async function run() {
       const id = req.params.id;
       const result = await cartCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
+    });
+
+    //get all user
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await userCollection.find().toArray();
+      res.send(result);
+    });
+
+    //save user to db
+    app.put("/users", async (req, res) => {
+      const user = req.body;
+      const filter = { userEmail: user?.userEmail };
+      const isExist = await userCollection.findOne(filter);
+      if (isExist) {
+        if (user.role === "Admin") {
+          const updateDoc = {
+            $set: {
+              role: user.role,
+            },
+          };
+          const result = await userCollection.updateOne(filter, updateDoc);
+          return res.send(result);
+        } else {
+          return res.send(isExist);
+        }
+      }
+
+      const option = { upsert: true };
+      const updateDoc = {
+        $set: {
+          ...user,
+        },
+      };
+      const result = await userCollection.updateOne(filter, updateDoc, option);
+      res.send(result);
+    });
+
+    //delete a user
+    app.delete("/users/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await userCollection.deleteOne({ _id: new ObjectId(id) });
+      res.send(result);
+    });
+
+    // get role (admin)
+    app.get("/users/admin/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.user.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      const query = {userEmail: email};
+      const user = await userCollection.findOne(query);
+      let isAdmin = false;
+      if(user){
+        isAdmin = user?.role === "Admin";
+      }
+      res.send({isAdmin})
     });
 
     // Send a ping to confirm a successful connection
