@@ -96,6 +96,11 @@ async function run() {
       const result = await menuCollection.find().toArray();
       res.send(result);
     });
+    app.post("/menu", async (req, res) => {
+      const menu = req.body;
+      const result = await menuCollection.insertOne(menu);
+      res.send(result);
+    });
     app.get("/reviews", async (req, res) => {
       const result = await reviewCollection.find().toArray();
       res.send(result);
@@ -168,13 +173,13 @@ async function run() {
       if (email !== req.user.email) {
         return res.status(403).send({ message: "forbidden access" });
       }
-      const query = {userEmail: email};
+      const query = { userEmail: email };
       const user = await userCollection.findOne(query);
       let isAdmin = false;
-      if(user){
+      if (user) {
         isAdmin = user?.role === "Admin";
       }
-      res.send({isAdmin})
+      res.send({ isAdmin });
     });
 
     // Send a ping to confirm a successful connection
