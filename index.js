@@ -8,7 +8,12 @@ require("dotenv").config();
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const corsOptions = {
-  origin: ["http://localhost:5173", "http://localhost:5174"],
+  origin: [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "https://bistro-boss-4fa71.web.app",
+    "https://bistro-boss-4fa71.firebaseapp.com",
+  ],
   credentials: true,
   optionSuccessStatus: 200,
 };
@@ -248,17 +253,91 @@ async function run() {
       res.send({ paymentResult, deleteResult });
     });
 
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
     app.get("/payment/:email", async (req, res) => {
       const result = await paymentCollection
         .find({ email: req?.params?.email })
         .toArray();
       res.send(result);
     });
+
+    app.get("/adminStat", verifyToken, verifyAdmin, async (req, res) => {
+      const revenue = await paymentCollection
+        .find(
+          {},
+          {
+            projection: {
+              price: 1,
+            },
+          }
+        )
+        .toArray();
+      const totalRevenue = revenue.reduce(
+        (total, item) => total + item.price,
+        0
+      );
+      const totalCustomer = await userCollection.countDocuments();
+      const totalProduct = await menuCollection.countDocuments();
+      const totalOrder = await paymentCollection.countDocuments();
+      res.send({
+        total_revenue: totalRevenue,
+        total_customer: totalCustomer,
+        total_product: totalProduct,
+        total_order: totalOrder,
+      });
+    });
+
+    app.get("/orderStat", async (req, res) => {
+      const result = await paymentCollection
+        .aggregate([
+          {
+            $unwind: "$menuItemIds",
+          },
+          {
+            $lookup: {
+              from: "menu",
+              let: { menuItemId: { $toObjectId: "$menuItemIds" } },
+              pipeline: [
+                { $match: { $expr: { $eq: ["$_id", "$$menuItemId"] } } },
+              ],
+              as: "menuItems",
+            },
+          },
+          {
+            $unwind: "$menuItems",
+          },
+          {
+            $group: {
+              _id: "$menuItems.category",
+              quantity: { $sum: 1 },
+              revenue: { $sum: "$menuItems.price" },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              category: "$_id",
+              quantity: "$quantity",
+              revenue: "$revenue",
+            },
+          },
+        ])
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/userStat/:email", verifyToken, async (req, res) => {
+      const myOrder = await paymentCollection
+        .find({ email: req.params?.email })
+        .toArray();
+      const totalMenu = await menuCollection.countDocuments();
+      res.send({ myOrder: myOrder, totalMenu: totalMenu });
+    });
+
+    // Send a ping to confirm a successful connection
+    // await client.db("admin").command({ ping: 1 });
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!"
+    );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
